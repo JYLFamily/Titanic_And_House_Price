@@ -1,4 +1,4 @@
-package com.basic
+package main.scala.com.basic
 
 object MapTest {
   def main(args: Array[String]): Unit = {

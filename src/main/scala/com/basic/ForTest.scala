@@ -1,4 +1,4 @@
-package com.basic
+package main.scala.com.basic
 
 object ForTest {
   def main(args: Array[String]): Unit = {

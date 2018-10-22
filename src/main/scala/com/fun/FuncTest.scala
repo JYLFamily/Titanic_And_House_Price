@@ -1,4 +1,4 @@
-package com.fun
+package main.scala.com.fun
 
 object FuncTest {
   def main(args: Array[String]): Unit = {

@@ -1,4 +1,4 @@
-package com.oop
+package main.scala.com.oop
 
 object ApplyTest {
   def apply(param1: String, param2: String): String = {

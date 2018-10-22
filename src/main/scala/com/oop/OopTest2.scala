@@ -1,4 +1,4 @@
-package com.oop
+package main.scala.com.oop
 
 class OopTest2(private var name: String = "") {
   private var birthday: String = ""

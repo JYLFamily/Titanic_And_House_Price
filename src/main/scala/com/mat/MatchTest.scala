@@ -1,4 +1,4 @@
-package com.mat
+package main.scala.com.mat
 
 object MatchTest {
   def main(args: Array[String]): Unit = {

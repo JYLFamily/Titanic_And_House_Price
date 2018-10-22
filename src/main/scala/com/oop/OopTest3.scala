@@ -1,4 +1,4 @@
-package com.oop
+package main.scala.com.oop
 
 class OopTest3(private var name: String, private var id: Int = OopTest3.newPersonId()) {
 

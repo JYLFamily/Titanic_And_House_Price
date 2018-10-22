@@ -1,4 +1,4 @@
-package com.oop
+package main.scala.com.oop
 
 class OopTest {
   private var privateValue = 0

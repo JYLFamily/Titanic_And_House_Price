@@ -1,4 +1,4 @@
-package com.oop
+package main.scala.com.oop
 
 object UpdateTest {
   def main(args: Array[String]): Unit = {

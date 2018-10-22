@@ -1,4 +1,4 @@
-package com.fun
+package main.scala.com.fun
 
 class FuncTest2 {
   def connectToNetWork(user: String)(wifi: String): Unit = {
