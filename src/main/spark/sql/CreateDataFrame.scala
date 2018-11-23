@@ -1,5 +1,7 @@
 package main.spark.sql
 
+import org.apache.spark.sql.Row
+import org.apache.spark.sql.types._
 import org.apache.spark.sql.SparkSession
 
 object CreateDataFrame {
