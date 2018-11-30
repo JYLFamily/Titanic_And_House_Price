@@ -9,7 +9,7 @@ import org.apache.spark.ml.evaluation.RegressionEvaluator
 import org.apache.spark.ml.param.ParamMap
 import org.apache.spark.ml.tuning.{CrossValidator, CrossValidatorModel, ParamGridBuilder}
 
-class PipelineTest(private val inputPath: String, private val outputPath: String) {
+class PipelineTest1(private val inputPath: String, private val outputPath: String) {
   private val spark: SparkSession = SparkSession.builder()
     .master("local[*]")
     .appName("PipelineTest")
@@ -225,9 +225,9 @@ class PipelineTest(private val inputPath: String, private val outputPath: String
   }
 }
 
-object PipelineTest {
+object PipelineTest1 {
   def main(args: Array[String]): Unit = {
-    val pt: PipelineTest = new PipelineTest(
+    val pt: PipelineTest1 = new PipelineTest1(
       "file:\\C:\\Users\\jiangyilan\\IdeaProjects\\Titanic_And_House_Price\\data\\HousePrice\\",
       "file:\\E:\\Kaggle\\House Price\\"
     )
