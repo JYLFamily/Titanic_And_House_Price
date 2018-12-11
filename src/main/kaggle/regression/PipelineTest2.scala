@@ -1,11 +1,14 @@
 package main.kaggle.regression
 
+import org.apache.spark.ml.evaluation.RegressionEvaluator
 import org.apache.spark.sql.types._
 import org.apache.spark.sql.functions._
+import org.apache.spark.sql.{DataFrame, SparkSession}
 import org.apache.spark.ml.feature.{StringIndexer, StringIndexerModel}
 import org.apache.spark.ml.feature.VectorAssembler
-import org.apache.spark.ml.regression.{GBTRegressor, GBTRegressionModel}
-import org.apache.spark.sql.{DataFrame, SparkSession}
+import org.apache.spark.ml.param.ParamMap
+import org.apache.spark.ml.tuning.{CrossValidator, CrossValidatorModel, ParamGridBuilder}
+import org.apache.spark.ml.regression.GBTRegressor
 
 class PipelineTest2(private val inputPath: String, private val outputPath: String) {
   private val spark: SparkSession = SparkSession
@@ -20,34 +23,35 @@ class PipelineTest2(private val inputPath: String, private val outputPath: Strin
 
   private var train: DataFrame = _
   private var test: DataFrame = _
+  private var sampleSubmission: DataFrame = _
   private var numericColumns: Array[String] = _
   private var categoricalColumns: Array[String] = _
+
+  private var featureColumns: Array[String] = _
   private var vectorAssembler: VectorAssembler = _
+  private var gBTRegressor: GBTRegressor = _
+
+  private var crossValidator: CrossValidator = _
+  private var crossValidarotModel: CrossValidatorModel = _
+  private var paramGridBuilder: Array[ParamMap] = _
 
   def readData(): Unit = {
     this.train = this.spark
       .read
       .option(key = "header", value = true)
       .option(key = "inferSchema", value = true)
+      .option(key = "nullValue", value = "")
       .csv(this.inputPath + "train.csv")
-      .repartition(1)
-      .cache()
 
     this.test = this.spark
       .read
       .option(key = "header", value = true)
       .option(key = "inferSchema", value = true)
+      .option(key = "nullValue", value = "")
       .csv(this.inputPath + "test.csv")
-      .repartition(1)
-      .cache()
   }
 
   def prepareData(): Unit = {
-    this.train = this.train
-      .drop("Id")
-    this.test = this.test
-      .drop("Id")
-
     /*
     * Feature Engineering
     * LotArea        地皮面积
@@ -63,7 +67,35 @@ class PipelineTest2(private val inputPath: String, private val outputPath: Strin
       .replace("MSZoning", Map[String, String]("C (all)" -> "C"))
     this.test = this.test
       .na
-      .replace("MSZoning", Map[String, String]("C (all)" -> "C"))
+      .replace(
+        Seq[String]("MSZoning", "BsmtFinSF1", "BsmtFinSF2", "BsmtUnfSF", "TotalBsmtSF", "BsmtFullBath", "BsmtHalfBath", "GarageCars", "GarageArea"),
+        Map[String, String]("C (all)" -> "C", "NA" -> null)
+      )
+    this.test = this.test
+      .withColumn("BsmtFinSF1Temp", $"BsmtFinSF1".cast(IntegerType))
+      .drop("BsmtFinSF1")
+      .withColumnRenamed("BsmtFinSF1Temp", "BsmtFinSF1")
+      .withColumn("BsmtFinSF2Temp", $"BsmtFinSF2".cast(IntegerType))
+      .drop("BsmtFinSF2")
+      .withColumnRenamed("BsmtFinSF2Temp", "BsmtFinSF2")
+      .withColumn("BsmtUnfSFTemp", $"BsmtUnfSF".cast(IntegerType))
+      .drop("BsmtUnfSF")
+      .withColumnRenamed("BsmtUnfSFTemp", "BsmtUnfSF")
+      .withColumn("TotalBsmtSFTemp", $"TotalBsmtSF".cast(IntegerType))
+      .drop("TotalBsmtSF")
+      .withColumnRenamed("TotalBsmtSFTemp", "TotalBsmtSF")
+      .withColumn("BsmtFullBathTemp", $"BsmtFullBath".cast(IntegerType))
+      .drop("BsmtFullBath")
+      .withColumnRenamed("BsmtFullBathTemp", "BsmtFullBath")
+      .withColumn("BsmtHalfBathTemp", $"BsmtHalfBath".cast(IntegerType))
+      .drop("BsmtHalfBath")
+      .withColumnRenamed("BsmtHalfBathTemp", "BsmtHalfBath")
+      .withColumn("GarageCarsTemp", $"GarageCars".cast(IntegerType))
+      .drop("GarageCars")
+      .withColumnRenamed("GarageCarsTemp", "GarageCars")
+      .withColumn("GarageAreaTemp", $"GarageArea".cast(IntegerType))
+      .drop("GarageArea")
+      .withColumnRenamed("GarageAreaTemp", "GarageArea")
 
     this.train = this.train
       .withColumn("MSSubClassTemp", $"MSSubClass".cast(StringType))
@@ -353,8 +385,10 @@ class PipelineTest2(private val inputPath: String, private val outputPath: Strin
       .withColumn("SaleType_SaleCondition", concat_ws("_", $"SaleType", $"SaleCondition"))
       .drop("SaleType", "SaleCondition")
 
-    numericColumns = for (tuple <- this.train.dtypes if ! tuple._1.equals("SalePrice") && ! tuple._2.equals("StringType")) yield tuple._1
-    categoricalColumns = for (tuple <- this.train.dtypes if ! tuple._1.equals("SalePrice") && tuple._2.equals("StringType")) yield tuple._1
+    this.numericColumns =
+      for (tuple <- this.train.dtypes if ! tuple._1.equals("SalePrice") && ! tuple._1.equals("Id") && ! tuple._2.equals("StringType")) yield tuple._1
+    this.categoricalColumns =
+      for (tuple <- this.train.dtypes if ! tuple._1.equals("SalePrice") && ! tuple._1.equals("Id") && tuple._2.equals("StringType")) yield tuple._1
 
     // numeric feature
     this.train = this.train
@@ -365,11 +399,7 @@ class PipelineTest2(private val inputPath: String, private val outputPath: Strin
       .fill(-9999, numericColumns)
 
     // encoder categorical feature
-    val prior = this.train.select(mean($"SalePrice" / ($"TotalBsmtSF" + $"GrLivArea")) as "prior")
-      .map(row => row.getDouble(0))
-      .first()
     for (col <- categoricalColumns) {
-      println(col)
       val stringIndexer: StringIndexer = new StringIndexer()
         .setInputCol(col)
         .setOutputCol(col + "_Index")
@@ -377,56 +407,58 @@ class PipelineTest2(private val inputPath: String, private val outputPath: Strin
       val stringIndexerModel: StringIndexerModel = stringIndexer.fit(this.train)
       this.train = stringIndexerModel.transform(this.train)
       this.test = stringIndexerModel.transform(this.test)
-
-      val coeff = this.train
-        .groupBy(col + "_Index")
-        .agg(count(col + "_Index") as "count")
-        .select(this.train(col + "_Index"), (lit(1) / (lit(1) + exp($"count" - lit(1)))) as "coeff")
-      val posterior = this.train
-        .groupBy(col + "_Index")
-        .agg(mean($"SalePrice" / ($"TotalBsmtSF" + $"GrLivArea")) as "posterior")
-      val coeffPriorPosterior = coeff
-        .join(posterior, Seq[String](col + "_Index"))
-        .withColumn(col + "_Target", $"coeff" * lit(prior) + (lit(1) - $"coeff") * $"posterior")
-        .select(col + "_Index", col + "_Target")
-
-      this.train = this.train
-        .join(coeffPriorPosterior, Seq[String](col + "_Index"))
-      this.test = this.test
-        .join(coeffPriorPosterior, Seq[String](col + "_Index"))
+      this.train = this.train.drop(col)
+      this.test = this.test.drop(col)
     }
-
-    categoricalColumns = for (tuple <- this.train.dtypes if tuple._1.endsWith("_Target")) yield tuple._1
-    this.train = this.train
-      .na
-      .fill(prior, categoricalColumns)
-    this.test = this.test
-      .na
-      .fill(prior, categoricalColumns)
 
     /*
      * Target Engineering
      * */
     this.train = this.train
-        .withColumn("label", log1p($"SalePrice" / ($"TotalBsmtSF" + $"GrLivArea")))
-    this.test = this.test
-        .withColumn("label", log1p($"SalePrice" / ($"TotalBsmtSF" + $"GrLivArea")))
-
-    this.train.show
-    this.test.show
-
-    spark.stop()
+        .withColumn("label", log1p($"SalePrice" / $"GrLivArea"))
   }
 
   def modelFitPredict(): Unit = {
-    numericColumns = for (tuple <- this.train.dtypes if  ! tuple._1.equals("label") && ! tuple._1.equals("SalePrice") && ! tuple._2.equals("StringType")) yield tuple._1
-    categoricalColumns = for (tuple <- this.train.dtypes if tuple._1.endsWith("_Index") || tuple._1.endsWith("_Target")) yield tuple._1
+    this.featureColumns =
+      for (col <- this.train.columns if ! col.equals("SalePrice") && ! col.equals("Id") && ! col.equals("label")) yield col
 
-    vectorAssembler = new VectorAssembler()
-      .setInputCols(numericColumns)
-      .setOutputCol("numeric_feature")
+    this.vectorAssembler = new VectorAssembler()
+      .setInputCols(this.featureColumns)
+      .setOutputCol("features")
     this.train = vectorAssembler.transform(this.train)
     this.test = vectorAssembler.transform(this.test)
+
+    this.gBTRegressor = new GBTRegressor()
+        .setSeed(7)
+        .setFeaturesCol(this.vectorAssembler.getOutputCol)
+        .setLabelCol("label")
+        .setPredictionCol("prediction")
+        .setMaxBins(9999)
+    this.paramGridBuilder = new ParamGridBuilder()
+      .addGrid(this.gBTRegressor.maxIter, Array(15, 20, 25, 30))
+      .addGrid(this.gBTRegressor.maxDepth, Array(5, 6, 7, 8))
+      .addGrid(this.gBTRegressor.stepSize, Array(0.05, 0.1, 0.15))
+      .addGrid(this.gBTRegressor.subsamplingRate, Array(0.65, 0.75, 0.85))
+      .build()
+
+    this.crossValidator = new CrossValidator()
+      .setEstimator(this.gBTRegressor)
+      .setEvaluator(new RegressionEvaluator().setMetricName("rmse"))
+      .setEstimatorParamMaps(this.paramGridBuilder)
+      .setNumFolds(3)
+      .setParallelism(4)
+
+    this.crossValidarotModel = this.crossValidator.fit(this.train)
+    this.test = this.crossValidarotModel.transform(this.test)
+        .withColumn("SalePrice", expm1($"prediction") * $"GrLivArea")
+    this.sampleSubmission = this.test.select($"Id", $"SalePrice")
+    this.sampleSubmission
+      .repartition(1)
+      .write
+      .option(key = "header", value = true)
+      .csv("C:\\Users\\jiangyilan\\Desktop\\sample_submission")
+
+    this.spark.stop()
   }
 }
 
@@ -435,6 +467,7 @@ object PipelineTest2 {
     val pt2: PipelineTest2  = new PipelineTest2("data/HousePrice/",  null)
     pt2.readData()
     pt2.prepareData()
-//    pt2.modelFitPredict()
+    pt2.modelFitPredict()
   }
 }
+

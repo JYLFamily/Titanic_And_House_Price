@@ -1,0 +1,11 @@
+<component name="libraryTable">
+  <library name="xgboost4j-spark-0.81">
+    <CLASSES>
+      <root url="jar://$USER_HOME$/Desktop/xgboost4j-spark-0.81.jar!/" />
+    </CLASSES>
+    <JAVADOC />
+    <SOURCES>
+      <root url="jar://$USER_HOME$/.ideaLibSources/xgboost4j-spark-0.81-sources.jar!/" />
+    </SOURCES>
+  </library>
+</component>
