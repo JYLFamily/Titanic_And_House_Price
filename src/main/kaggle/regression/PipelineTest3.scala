@@ -1,25 +1,25 @@
 package main.kaggle.regression
 
+import scala.collection.immutable.Map
+import org.apache.spark.ml.evaluation.RegressionEvaluator
 import org.apache.spark.sql.types._
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.{DataFrame, SparkSession}
-import org.apache.spark.ml.attribute.NumericAttribute
 import org.apache.spark.ml.feature.{StringIndexer, StringIndexerModel}
 import org.apache.spark.ml.feature.VectorAssembler
-import org.apache.spark.ml.feature.{VectorIndexer, VectorIndexerModel}
 import org.apache.spark.ml.param.ParamMap
 import org.apache.spark.ml.tuning.{CrossValidator, CrossValidatorModel, ParamGridBuilder}
-import org.apache.spark.ml.regression.{GBTRegressor, GBTRegressionModel}
-import org.apache.spark.ml.evaluation.RegressionEvaluator
+import ml.dmlc.xgboost4j.scala.spark.XGBoostRegressor
+import com.microsoft.ml.spark.LightGBMRegressor
 
-class PipelineTest2(private val inputPath: String, private val outputPath: String) {
+class PipelineTest3(private val inputPath: String, private val outputPath: String) {
   private val spark: SparkSession = SparkSession
-      .builder()
-      .master("local[*]")
-      .config("spark.driver.memory", "4G")
-      .config("spark.executor.memory", "4G")
-      .appName("PipelineTest2")
-      .getOrCreate()
+    .builder()
+    .master("local[4]")
+    .config("spark.driver.memory", "4G")
+    .config("spark.executor.memory", "4G")
+    .appName("PipelineTest2")
+    .getOrCreate()
   spark.sparkContext.setLogLevel("WARN")
   import spark.implicits._
 
@@ -31,11 +31,8 @@ class PipelineTest2(private val inputPath: String, private val outputPath: Strin
 
   private var featureColumns: Array[String] = _
   private var vectorAssembler: VectorAssembler = _
-  private var vectorIndexer: VectorIndexer = _
-  private var vectorIndexerModel: VectorIndexerModel = _
-  private var gBTRegressor: GBTRegressor = _
-  private var regressionEvaluator: RegressionEvaluator = _
-  private var featureImportance: Array[Double] = _
+  private var xGBR: XGBoostRegressor = _
+  private var lGBR: LightGBMRegressor = _
 
   private var crossValidator: CrossValidator = _
   private var crossValidarotModel: CrossValidatorModel = _
@@ -404,16 +401,7 @@ class PipelineTest2(private val inputPath: String, private val outputPath: Strin
       .na
       .fill(-9999, numericColumns)
 
-    // categorical feature
-    this.train = this.train
-      .na
-      .fill("missing", categoricalColumns)
-    this.test = this.test
-      .na
-      .fill("missing", categoricalColumns)
-
     // encoder categorical feature
-    val prior: Double = this.train.select(mean($"SalePrice")).map(row => row.getDouble(0)).collect()(0)
     for (col <- categoricalColumns) {
       val stringIndexer: StringIndexer = new StringIndexer()
         .setInputCol(col)
@@ -422,40 +410,15 @@ class PipelineTest2(private val inputPath: String, private val outputPath: Strin
       val stringIndexerModel: StringIndexerModel = stringIndexer.fit(this.train)
       this.train = stringIndexerModel.transform(this.train)
       this.test = stringIndexerModel.transform(this.test)
-
-      val begin = System.currentTimeMillis()
-      val meanEncoder: DataFrame = this.train
-        .select(col, "SalePrice")
-        .groupBy(col)
-        .agg(count("SalePrice") as "count", mean("SalePrice") as "posterior")
-        .withColumn("coefficient", lit(1) / (lit(1) + exp($"count" - lit(1))))
-        .withColumn(col + "_Target", $"coefficient" * lit(prior) + (lit(1) - $"coefficient") * $"posterior")
-        .select(col, col + "_Target")
-        .cache()
-      this.train = this.train
-        .join(meanEncoder, Seq[String](col), "left")
-      this.test = this.test
-        .join(meanEncoder, Seq[String](col), "left")
-      meanEncoder.unpersist()
-      val end = System.currentTimeMillis()
-      println(col + ": " + (end - begin))
-
-      this.train = this.train
-        .withColumn(col + "_Index_Temp", this.train(col + "_Index").as(col + "_Index", NumericAttribute.defaultAttr.withName(col + "_index").toMetadata))
-        .drop(col, col + "_Index")
-        .withColumnRenamed(col + "_Index_Temp", col + "_Index")
-
-      this.test = this.test
-        .withColumn(col + "_Index_Temp", this.test(col + "_Index").as(col + "_Index", NumericAttribute.defaultAttr.withName(col + "_index").toMetadata))
-        .drop(col, col + "_Index")
-        .withColumnRenamed(col + "_Index_Temp", col + "_Index")
+      this.train = this.train.drop(col)
+      this.test = this.test.drop(col)
     }
 
     /*
      * Target Engineering
      * */
     this.train = this.train
-      .withColumn("label", log1p($"SalePrice" / ($"GrLivArea" + when($"TotalBsmtSF" === -9999, 0).otherwise($"TotalBsmtSF"))))
+      .withColumn("label", log1p($"SalePrice" / $"GrLivArea"))
   }
 
   def modelFitPredict(): Unit = {
@@ -465,62 +428,52 @@ class PipelineTest2(private val inputPath: String, private val outputPath: Strin
     this.vectorAssembler = new VectorAssembler()
       .setInputCols(this.featureColumns)
       .setOutputCol("features")
-    this.train = this.vectorAssembler.transform(this.train)
-    this.test = this.vectorAssembler.transform(this.test)
+    this.train = vectorAssembler.transform(this.train)
+    this.test = vectorAssembler.transform(this.test)
 
-    this.gBTRegressor = new GBTRegressor()
+//    this.xGBR = new XGBoostRegressor()
+//      .setFeaturesCol(this.vectorAssembler.getOutputCol)
+//      .setLabelCol("label")
+//      .setPredictionCol("prediction")
+//      .setMaxBins(9999)
+//      .setMissing(-9999)
+//      .setSeed(7)
+
+    this.lGBR = new LightGBMRegressor()
       .setFeaturesCol(this.vectorAssembler.getOutputCol)
       .setLabelCol("label")
       .setPredictionCol("prediction")
-      .setMaxBins(128)
-      .setSeed(7)
 
-    this.paramGridBuilder = new ParamGridBuilder()
-      .addGrid(this.gBTRegressor.maxIter, Array(60, 90, 120))
-      .addGrid(this.gBTRegressor.maxDepth, Array(4, 6))
-      .addGrid(this.gBTRegressor.stepSize, Array(0.05, 0.1, 0.15, 0.2))
-      .addGrid(this.gBTRegressor.subsamplingRate, Array(0.75, 0.85, 0.95))
-      .build()
+//    this.paramGridBuilder = new ParamGridBuilder()
+//      .addGrid(this.lightGBM.learningRate, Array(0.05, 0.1, 0.15))
+//      .addGrid(this.lightGBM.numIterations, Array(15, 20, 25, 30))
+//      .addGrid(this.lightGBM.maxDepth, Array(5, 6, 7, 8))
+//      .addGrid(this.lightGBM.baggingFraction, Array(0.65, 0.75, 0.85))
+//      .addGrid(this.lightGBM.featureFraction, Array(0.65, 0.75, 0.85))
+//      .build()
+//
+//    this.crossValidator = new CrossValidator()
+//      .setEstimator(this.lightGBM)
+//      .setEvaluator(new RegressionEvaluator().setMetricName("rmse"))
+//      .setEstimatorParamMaps(this.paramGridBuilder)
+//      .setNumFolds(3)
+//
+//    this.crossValidarotModel = this.crossValidator.fit(this.train)
+//    this.test = this.crossValidarotModel.transform(this.test)
+//      .withColumn("SalePrice", expm1($"prediction") * $"GrLivArea")
 
-    this.crossValidator = new CrossValidator()
-      .setEstimator(this.gBTRegressor)
-      .setEvaluator(new RegressionEvaluator().setMetricName("rmse"))
-      .setEstimatorParamMaps(this.paramGridBuilder)
-      .setNumFolds(3)
-      .setParallelism(8)
+//    this.test = this.xGBR
+//      .fit(this.train)
+//      .transform(this.test)
 
-    this.crossValidarotModel = this.crossValidator.fit(this.train)
-    this.train = this.crossValidarotModel.transform(this.train)
-    this.regressionEvaluator = new RegressionEvaluator()
-      .setMetricName("rmse")
-      .setLabelCol("label")
-      .setPredictionCol("prediction")
-    println("Train Set: " + this.regressionEvaluator.evaluate(this.train))
-    println("NumTrees: " + this.crossValidarotModel.bestModel.asInstanceOf[GBTRegressionModel].getNumTrees)
-    println("MaxDepth: " + this.crossValidarotModel.bestModel.asInstanceOf[GBTRegressionModel].getMaxDepth)
-    println("StepSize: " +this.crossValidarotModel.bestModel.asInstanceOf[GBTRegressionModel].getStepSize)
-    println("SubsamplingRate: " + this.crossValidarotModel.bestModel.asInstanceOf[GBTRegressionModel].getSubsamplingRate)
+    this.test = this.lGBR
+      .fit(this.train)
+      .transform(this.test)
 
-    this.featureImportance = this.crossValidarotModel.bestModel.asInstanceOf[GBTRegressionModel].featureImportances.toArray
-    val feature =
-      this.spark.sparkContext.parallelize(this.featureColumns).toDF("feature").withColumn("Id", monotonically_increasing_id())
-    val importance =
-      this.spark.sparkContext.parallelize(this.featureImportance).toDF("importance").withColumn("Id", monotonically_increasing_id())
-    feature
-      .join(importance, Seq[String]("Id"), "left")
-      .drop("Id")
-      .orderBy(desc("importance"))
-      .show()
-  }
-
-  def writeData(): Unit = {
-    this.test = this.crossValidarotModel.transform(this.test)
-      .withColumn("SalePrice", expm1($"prediction") * ($"GrLivArea" + when($"TotalBsmtSF" === -9999, 0).otherwise($"TotalBsmtSF")))
     this.sampleSubmission = this.test.select($"Id", $"SalePrice")
     this.sampleSubmission
       .repartition(1)
       .write
-      .mode("overwrite")
       .option(key = "header", value = true)
       .csv("C:\\Users\\jiangyilan\\Desktop\\sample_submission")
 
@@ -528,13 +481,11 @@ class PipelineTest2(private val inputPath: String, private val outputPath: Strin
   }
 }
 
-object PipelineTest2 {
+object PipelineTest3 {
   def main(args: Array[String]): Unit = {
-    val pt2: PipelineTest2  = new PipelineTest2("data/HousePrice/",  null)
-    pt2.readData()
-    pt2.prepareData()
-    pt2.modelFitPredict()
-    pt2.writeData()
+    val pt3: PipelineTest3  = new PipelineTest3("data/HousePrice/",  null)
+    pt3.readData()
+    pt3.prepareData()
+    pt3.modelFitPredict()
   }
 }
-

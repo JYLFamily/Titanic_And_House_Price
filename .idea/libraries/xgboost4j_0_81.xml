@@ -1,7 +1,7 @@
 <component name="libraryTable">
-  <library name="mmlspark-0.14">
+  <library name="xgboost4j-0.81">
     <CLASSES>
-      <root url="jar://E:/Spark/mmlspark-0.14.jar!/" />
+      <root url="jar://E:/Spark/xgboost4j-0.81.jar!/" />
     </CLASSES>
     <JAVADOC />
     <SOURCES />
